@@ -1,0 +1,28 @@
+name: Push Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    name: Build and Release
+    steps:
+      - uses: actions/checkout@v3
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: master
+      - run: echo "VERSION=${GITHUB_REF##*/}" >> $GITHUB_ENV
+        id: version
+      - run: zig build -Dversion=${{ env.VERSION }} -Doptimize=ReleaseSmall
+      - run: strip --strip-all ./zig-out/bin/vhttp
+      - run: upx --best --lzma ./zig-out/bin/vhttp
+      - run: zip -j vintus.http-${{ env.VERSION }}-linux-x86_64.zip ./zig-out/bin/vhttp
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./vintus.http-${{ env.VERSION }}-linux-x86_64.zip
+          asset_name: vintus.http-${{ env.VERSION }}-linux-x86_64.zip
+          asset_content_type: application/zip

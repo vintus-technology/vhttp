@@ -1,28 +1,48 @@
 const std = @import("std");
 const http = std.http;
+const config = @import("config");
 
-pub fn main() !void {
-    var args = std.process.args();
-    _ = args.skip(); // skip the executable
+fn show_status(req: *const http.Client.Request) void {
+    std.debug.print("{d} {s}\n", .{
+        @intFromEnum(req.response.status),
+        @tagName(req.response.status),
+    });
+}
 
-    const method = try parse_method(&args);
+fn show_headers(req: *const http.Client.Request) void {
+    var headers = req.response.iterateHeaders();
 
-    const url = args.next() orelse {
-        std.debug.print("Specify a url\n", .{});
-        std.process.exit(1);
-    };
+    while (headers.next()) |h| {
+        std.debug.print("\x1b[35m{s}\x1b[0m {s}\n", .{ h.name, h.value });
+    }
+}
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+fn show_body(req: *http.Client.Request) !void {
+    if (req.response.content_length == null and req.response.transfer_encoding == .none) {
+        std.process.exit(0);
+    }
 
-    var client = http.Client{ .allocator = gpa.allocator() };
+    const stdout = std.io.getStdOut().writer();
+    const chunk_size = 65536;
+    var buffer: [chunk_size]u8 = undefined;
+    var read_length: ?usize = null;
+    while (read_length != 0) {
+        read_length = try req.readAll(&buffer);
+        try stdout.print("{s}", .{buffer[0..read_length.?]});
+    }
+}
+
+fn do_version() void {
+    std.debug.print("{s}\n", .{config.version});
+}
+
+fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !void {
+    var client = http.Client{ .allocator = allocator };
     defer client.deinit();
 
     var buf: [4096]u8 = undefined;
 
-    const uri = try std.Uri.parse(url);
-
-    var req = try client.open(method, uri, .{
+    var req = try client.open(request.method, request.url, .{
         .server_header_buffer = &buf,
     });
 
@@ -32,34 +52,74 @@ pub fn main() !void {
     try req.finish();
     try req.wait();
 
-    std.debug.print("{s} {s} -> {d} {s}\n", .{
-        @tagName(method),
-        url,
-        @intFromEnum(req.response.status),
-        @tagName(req.response.status),
-    });
+    show_status(&req);
+    show_headers(&req);
+    try show_body(&req);
+}
 
-    var headers = req.response.iterateHeaders();
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
 
-    while (headers.next()) |h| {
-        std.debug.print("\x1b[35m{s}\x1b[0m {s}\n", .{ h.name, h.value });
+    const request = try parse_args();
+
+    switch (request) {
+        .version => do_version(),
+        .http => |*r| try do_request(r, gpa.allocator()),
     }
-
-    _ = req.response.content_length orelse {
-        // OK: No response body to show
-        std.process.exit(0);
-    };
-    const body_size = 65536;
-    var bbuffer: [body_size]u8 = undefined;
-    const read_length = try req.readAll(&bbuffer);
-    const stdout = std.io.getStdOut().writer();
-    try stdout.print("{s}", .{bbuffer[0..read_length]});
 }
 
 const ArgumentError = error{
     MissingHttpMethod,
     InvalidHttpMethod,
 };
+
+const RequestCommand = struct {
+    method: http.Method,
+    url: std.Uri,
+};
+
+const VersionCommand = struct {};
+
+const Command = union(enum) {
+    version: VersionCommand,
+    http: RequestCommand,
+};
+
+fn parse_args() !Command {
+    var args = std.process.args();
+    _ = args.skip(); // skip the executable
+
+    return try parse_command(&args);
+}
+
+fn parse_command(args: *std.process.ArgIterator) !Command {
+    const command = args.next() orelse return ArgumentError.MissingHttpMethod;
+
+    if (std.mem.eql(u8, command, "version")) {
+        return Command{
+            .version = VersionCommand{},
+        };
+    }
+
+    return try parse_request(args);
+}
+
+fn parse_request(args: *std.process.ArgIterator) !Command {
+    const method = try parse_method(args);
+
+    const url = args.next() orelse {
+        std.debug.print("Specify a url\n", .{});
+        std.process.exit(1);
+    };
+
+    return Command{
+        .http = .{
+            .url = try std.Uri.parse(url),
+            .method = method,
+        },
+    };
+}
 
 fn parse_method(args: *std.process.ArgIterator) ArgumentError!http.Method {
     const method = args.next() orelse return ArgumentError.MissingHttpMethod;

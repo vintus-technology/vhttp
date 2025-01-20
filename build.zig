@@ -23,6 +23,13 @@ pub fn build(b: *std.Build) void {
         .strip = optimize == .ReleaseSmall,
     });
 
+    const version = b.option([]const u8, "version", "Application version") orelse "0.0.0-dev";
+
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
+
+    exe.root_module.addOptions("config", options);
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
