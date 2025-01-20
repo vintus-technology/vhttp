@@ -45,13 +45,15 @@ pub fn main() !void {
         std.debug.print("\x1b[35m{s}\x1b[0m {s}\n", .{ h.name, h.value });
     }
 
-    const blength = req.response.content_length orelse {
+    _ = req.response.content_length orelse {
+        // OK: No response body to show
         std.process.exit(0);
     };
     const body_size = 65536;
     var bbuffer: [body_size]u8 = undefined;
-    _ = try req.readAll(&bbuffer);
-    std.debug.print("{s}\n", .{bbuffer[0..blength]});
+    const read_length = try req.readAll(&bbuffer);
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("{s}", .{bbuffer[0..read_length]});
 }
 
 const ArgumentError = error{
