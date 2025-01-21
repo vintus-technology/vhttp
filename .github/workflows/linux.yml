@@ -1,8 +1,12 @@
 name: Push Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
 
 jobs:
   release:
@@ -14,15 +18,18 @@ jobs:
         with:
           version: master
       - run: echo "VERSION=${GITHUB_REF##*/}" >> $GITHUB_ENV
+        name: version
         id: version
       - run: zig build -Dversion=${{ env.VERSION }} -Doptimize=ReleaseSmall
+        name: build
       - run: strip --strip-all ./zig-out/bin/vhttp
+        name: strip
       - run: upx --best --lzma ./zig-out/bin/vhttp
+        name: pack
       - run: zip -j vintus.http-${{ env.VERSION }}-linux-x86_64.zip ./zig-out/bin/vhttp
-      - name: Upload release asset
-        uses: actions/upload-release-asset@v1
+        name: zip
+      - uses: softprops/action-gh-release@v2
+        name: release
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./vintus.http-${{ env.VERSION }}-linux-x86_64.zip
-          asset_name: vintus.http-${{ env.VERSION }}-linux-x86_64.zip
-          asset_content_type: application/zip
+          files: |
+            vintus.http-${{ env.VERSION }}-linux-x86_64.zip
