@@ -70,7 +70,7 @@ pub fn main() !void {
 }
 
 const ArgumentError = error{
-    MissingHttpMethod,
+    MissingCommand,
     InvalidHttpMethod,
 };
 
@@ -94,7 +94,7 @@ fn parse_args() !Command {
 }
 
 fn parse_command(args: *std.process.ArgIterator) !Command {
-    const command = args.next() orelse return ArgumentError.MissingHttpMethod;
+    const command = args.next() orelse return ArgumentError.MissingCommand;
 
     if (std.mem.eql(u8, command, "version")) {
         return Command{
@@ -102,11 +102,11 @@ fn parse_command(args: *std.process.ArgIterator) !Command {
         };
     }
 
-    return try parse_request(args);
+    return try parse_request(command, args);
 }
 
-fn parse_request(args: *std.process.ArgIterator) !Command {
-    const method = try parse_method(args);
+fn parse_request(command: [:0]const u8, args: *std.process.ArgIterator) !Command {
+    const method = try parse_method(command);
 
     const url = args.next() orelse {
         std.debug.print("Specify a url\n", .{});
@@ -121,11 +121,9 @@ fn parse_request(args: *std.process.ArgIterator) !Command {
     };
 }
 
-fn parse_method(args: *std.process.ArgIterator) ArgumentError!http.Method {
-    const method = args.next() orelse return ArgumentError.MissingHttpMethod;
-
+fn parse_method(command: [:0]const u8) ArgumentError!http.Method {
     inline for (std.meta.fields(http.Method)) |f| {
-        if (std.ascii.eqlIgnoreCase(f.name, method)) {
+        if (std.ascii.eqlIgnoreCase(f.name, command)) {
             return @enumFromInt(f.value);
         }
     }
