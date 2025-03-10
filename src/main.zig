@@ -1,6 +1,7 @@
 const std = @import("std");
 const http = std.http;
 const config = @import("config");
+const ansi = @import("ansi.zig");
 
 fn show_status(req: *const http.Client.Request) void {
     std.debug.print("{d} {s}\n", .{
@@ -9,11 +10,21 @@ fn show_status(req: *const http.Client.Request) void {
     });
 }
 
+const style_request_header = ansi.build(.{
+    .fg = .blue,
+    .bold = true,
+});
+
+const style_response_header = ansi.build(.{
+    .fg = .cyan,
+    .bold = true,
+});
+
 fn show_headers(req: *const http.Client.Request) void {
     var headers = req.response.iterateHeaders();
 
     while (headers.next()) |h| {
-        std.debug.print("\x1b[35m{s}\x1b[0m {s}\n", .{ h.name, h.value });
+        std.debug.print(style_response_header ++ "{s}" ++ ansi.reset ++ " {s}\n", .{ h.name, h.value });
     }
 }
 
@@ -36,6 +47,22 @@ fn do_version() void {
     std.debug.print("{s}\n", .{config.version});
 }
 
+fn do_help(exe: []const u8) void {
+    std.debug.print(
+        \\{s} <command/method> <url?> <options?>
+        \\
+        \\commands:
+        \\  <method>    Sends an http request using the specified method
+        \\              to the specified <url>
+        \\              options:
+        \\                <stdin>   Use stdin to pass a request body
+        \\                -H        Set a header using "header: value" syntax
+        \\  version     Shows version information
+        \\  help        Shows this help menu
+        \\
+    , .{exe});
+}
+
 fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !void {
     var client = http.Client{ .allocator = allocator };
     defer client.deinit();
@@ -44,9 +71,13 @@ fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !voi
 
     var req = try client.open(request.method, request.url, .{
         .server_header_buffer = &buf,
+        .extra_headers = request.headers,
     });
-
     defer req.deinit();
+
+    for (req.extra_headers) |h| {
+        std.debug.print(style_request_header ++ "{s}" ++ ansi.reset ++ " {s}\n", .{ h.name, h.value });
+    }
 
     try req.send();
     try req.finish();
@@ -60,11 +91,19 @@ fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !voi
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    const request = try parse_args();
+    var args = std.process.args();
+    const exe = args.next() orelse unreachable;
+    const request = try parse_args(allocator, &args);
 
     switch (request) {
+        .root => {
+            do_version();
+            do_help(exe);
+        },
         .version => do_version(),
+        .help => do_help(exe),
         .http => |*r| try do_request(r, gpa.allocator()),
     }
 }
@@ -77,35 +116,47 @@ const ArgumentError = error{
 const RequestCommand = struct {
     method: http.Method,
     url: std.Uri,
+    headers: []const std.http.Header,
 };
 
+const RootCommand = struct {};
 const VersionCommand = struct {};
+const HelpCommand = struct {};
 
 const Command = union(enum) {
+    root: RootCommand,
     version: VersionCommand,
+    help: HelpCommand,
     http: RequestCommand,
 };
 
-fn parse_args() !Command {
-    var args = std.process.args();
-    _ = args.skip(); // skip the executable
-
-    return try parse_command(&args);
+fn parse_args(allocator: std.mem.Allocator, args: *std.process.ArgIterator) !Command {
+    return try parse_command(allocator, args);
 }
 
-fn parse_command(args: *std.process.ArgIterator) !Command {
-    const command = args.next() orelse return ArgumentError.MissingCommand;
+fn parse_command(allocator: std.mem.Allocator, args: *std.process.ArgIterator) !Command {
+    const command = args.next() orelse return .{ .root = RootCommand{} };
 
     if (std.mem.eql(u8, command, "version")) {
-        return Command{
+        return .{
             .version = VersionCommand{},
         };
     }
 
-    return try parse_request(command, args);
+    if (std.mem.eql(u8, command, "help")) {
+        return .{
+            .help = HelpCommand{},
+        };
+    }
+
+    return try parse_request(allocator, command, args);
 }
 
-fn parse_request(command: [:0]const u8, args: *std.process.ArgIterator) !Command {
+fn parse_request(
+    allocator: std.mem.Allocator,
+    command: [:0]const u8,
+    args: *std.process.ArgIterator,
+) !Command {
     const method = try parse_method(command);
 
     const url = args.next() orelse {
@@ -113,10 +164,43 @@ fn parse_request(command: [:0]const u8, args: *std.process.ArgIterator) !Command
         std.process.exit(1);
     };
 
-    return Command{
+    var headers = std.ArrayList(std.http.Header).init(allocator);
+    defer headers.deinit();
+
+    while (true) {
+        const arg = args.next() orelse break;
+        const flag = arg[1..];
+
+        switch (flag[0]) {
+            'H' => {
+                const a = args.next() orelse return error.MissingHeaderValue;
+                var i = std.mem.indexOf(u8, a, ":") orelse {
+                    return error.InvalidHttpHeader;
+                };
+
+                const name = a[0..i];
+                while (true) {
+                    i = i + 1;
+                    if (!std.ascii.isWhitespace(a[i]) and a[i] != ':') {
+                        break;
+                    }
+                }
+                const value = a[i..a.len];
+
+                try headers.append(.{
+                    .name = name,
+                    .value = value,
+                });
+            },
+            else => return error.InvalidFlag,
+        }
+    }
+
+    return .{
         .http = .{
             .url = try std.Uri.parse(url),
             .method = method,
+            .headers = try headers.toOwnedSlice(),
         },
     };
 }

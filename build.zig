@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
-        .name = "vhttp",
+        .name = "vintus_http",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -36,13 +36,13 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     const exe_check = b.addExecutable(.{
-        .name = "vhttp",
+        .name = "vintus_http",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const check = b.step("check", "Check if vhttp compiles");
+    const check = b.step("check", "Check if vintus_http compiles");
     check.dependOn(&exe_check.step);
 
     // This *creates* a Run step in the build graph, to be executed when another
