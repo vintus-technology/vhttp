@@ -75,6 +75,16 @@ fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !voi
     });
     defer req.deinit();
 
+    const style_method = comptime ansi.build(.{
+        .fg = .yellow,
+    });
+
+    // TODO: Once the zig http client supports HTTP 2 and we support it too
+    //       remove the hardcoded log below
+    std.debug.print("HTTP/1.1 " ++ style_method ++ "{s}" ++ ansi.reset ++ " {}\n", .{
+        @tagName(request.method),
+        request.url,
+    });
     for (req.extra_headers) |h| {
         std.debug.print(style_request_header ++ "{s}" ++ ansi.reset ++ " {s}\n", .{ h.name, h.value });
     }
@@ -159,7 +169,7 @@ fn parse_request(
 ) !Command {
     const method = try parse_method(command);
 
-    const url = args.next() orelse {
+    var url = args.next() orelse {
         std.debug.print("Specify a url\n", .{});
         std.process.exit(1);
     };
@@ -196,9 +206,17 @@ fn parse_request(
         }
     }
 
+    if (std.mem.indexOf(u8, url, "://") == null) {
+        var buf = std.ArrayList(u8).init(allocator);
+        defer buf.deinit();
+        try buf.appendSlice("https://");
+        try buf.appendSlice(url);
+        url = try buf.toOwnedSliceSentinel(0);
+    }
+
     return .{
         .http = .{
-            .url = try std.Uri.parse(url),
+            .url = try (std.Uri.parse(url)),
             .method = method,
             .headers = try headers.toOwnedSlice(),
         },
