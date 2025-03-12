@@ -113,6 +113,7 @@ fn do_request(request: *RequestCommand, allocator: std.mem.Allocator) !void {
     std.debug.print("sending...\n", .{});
     try req.send();
 
+    // TODO: Request body does not get sent yet.
     const stdin = std.io.getStdIn();
     if (!stdin.isTty()) {
         const request_body = try stdin.readToEndAlloc(allocator, 10485760);
