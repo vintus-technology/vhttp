@@ -3,6 +3,26 @@ const http = std.http;
 const config = @import("config");
 const ansi = @import("ansi.zig");
 
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var args = std.process.args();
+    const exe = args.next() orelse unreachable;
+    var request = try parse_args(allocator, &args);
+
+    switch (request) {
+        .root => {
+            do_version();
+            do_help(exe);
+        },
+        .version => do_version(),
+        .help => do_help(exe),
+        .http => |*r| try do_request(r, gpa.allocator()),
+    }
+}
+
 fn show_status(req: *const http.Client.Request) void {
     std.debug.print("{d} {s}\n", .{
         @intFromEnum(req.response.status),
@@ -63,14 +83,16 @@ fn do_help(exe: []const u8) void {
     , .{exe});
 }
 
-fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !void {
+fn do_request(request: *RequestCommand, allocator: std.mem.Allocator) !void {
+    defer request.deinit(allocator);
+
     var client = http.Client{ .allocator = allocator };
     defer client.deinit();
 
-    var buf: [4096]u8 = undefined;
+    var buf_headers: [4096]u8 = undefined;
 
     var req = try client.open(request.method, request.url, .{
-        .server_header_buffer = &buf,
+        .server_header_buffer = &buf_headers,
         .extra_headers = request.headers,
     });
     defer req.deinit();
@@ -79,9 +101,8 @@ fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !voi
         .fg = .yellow,
     });
 
-    // TODO: Once the zig http client supports HTTP 2 and we support it too
-    //       remove the hardcoded log below
-    std.debug.print("HTTP/1.1 " ++ style_method ++ "{s}" ++ ansi.reset ++ " {}\n", .{
+    std.debug.print("{s} " ++ style_method ++ "{s}" ++ ansi.reset ++ " {}\n", .{
+        @tagName(req.version),
         @tagName(request.method),
         request.url,
     });
@@ -89,33 +110,27 @@ fn do_request(request: *const RequestCommand, allocator: std.mem.Allocator) !voi
         std.debug.print(style_request_header ++ "{s}" ++ ansi.reset ++ " {s}\n", .{ h.name, h.value });
     }
 
+    std.debug.print("sending...\n", .{});
     try req.send();
+
+    const stdin = std.io.getStdIn();
+    if (!stdin.isTty()) {
+        const request_body = try stdin.readToEndAlloc(allocator, 10485760);
+        defer allocator.free(request_body);
+        req.transfer_encoding = .{ .content_length = request_body.len };
+        var writer = req.writer();
+        _ = try writer.write(request_body);
+    } else {
+        std.debug.print("No request body specified...\n", .{});
+    }
+    std.debug.print("finishing...\n", .{});
     try req.finish();
+    std.debug.print("waiting...\n", .{});
     try req.wait();
 
     show_status(&req);
     show_headers(&req);
     try show_body(&req);
-}
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var args = std.process.args();
-    const exe = args.next() orelse unreachable;
-    const request = try parse_args(allocator, &args);
-
-    switch (request) {
-        .root => {
-            do_version();
-            do_help(exe);
-        },
-        .version => do_version(),
-        .help => do_help(exe),
-        .http => |*r| try do_request(r, gpa.allocator()),
-    }
 }
 
 const ArgumentError = error{
@@ -127,6 +142,10 @@ const RequestCommand = struct {
     method: http.Method,
     url: std.Uri,
     headers: []const std.http.Header,
+
+    pub fn deinit(self: *RequestCommand, allocator: std.mem.Allocator) void {
+        allocator.free(self.headers);
+    }
 };
 
 const RootCommand = struct {};
